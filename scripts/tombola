@@ -1,0 +1,45 @@
+#!/Users/mallen/perl5/perlbrew/perls/dtrace-perl/bin/perl
+
+use 5.018;
+
+use WWW::Twilio::API;
+use JSON;
+use Storable;
+use Config::Tiny;
+use Time::Piece;
+
+my $conf_file = "$ENV{HOME}/.tombola";
+my $entry_db = "entries.db";
+
+die "Couldn't find $conf_file\n" unless -e $conf_file;
+
+my $config = Config::Tiny->read($conf_file) or die "Couldn't read $conf_file\n";
+
+my $twilio = WWW::Twilio::API->new( AccountSid => $config->{twilio}->{sid},
+                                    AuthToken  => $config->{twilio}->{auth} );
+
+my $t = Time::Piece->new();
+
+my $date = $t->ymd();
+
+my $response = $twilio->GET("SMS/Messages.json?DateSent>=$date&PageSize=1000");
+
+unless ($response->{code} == 200) {
+    die "Twilio call failed ($response->{code}): $response->{message}\n$response->{content}\n";
+}
+
+my $data = JSON->new->decode($response->{content});
+
+my $entries = {};
+if ( -e $entry_db) {
+    my $entries = retrieve($entry_db);
+}
+
+my @new = grep { lc($_->{body}) eq "enter $config->{entry}->{name}" } 
+                grep { $_->{direction} eq "inbound" }
+                grep { not exists $entries->{$_->{from}} } @{$data->{sms_messages}};
+
+if ( scalar @new ) {
+    map {; $entries->{$_->{from}} = $_ } @new;
+    store $entries, $entry_db;
+}

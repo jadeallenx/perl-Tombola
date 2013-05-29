@@ -7,9 +7,20 @@ use JSON;
 use Storable;
 use Config::Tiny;
 use Time::Piece;
+use Getopt::Long;
+use List::Util qw(shuffle);
 
 my $conf_file = "$ENV{HOME}/.tombola";
 my $entry_db = "entries.db";
+my $winner = 0;
+my $help = 0;
+
+GetOptions (
+    "conf|c=s"     => \$conf_file,
+    "database|d=s" => \$entry_db,
+    "winner|w"     => \$winner,
+    "help|h|?"     => \$help,
+);
 
 die "Couldn't find $conf_file\n" unless -e $conf_file;
 
@@ -41,5 +52,20 @@ my @new = grep { lc($_->{body}) eq "enter $config->{entry}->{name}" }
 
 if ( scalar @new ) {
     map {; $entries->{$_->{from}} = $_ } @new;
+
+    if ( $winner ) {
+        my $winner = shift( shuffle ( grep { not exists $_->{winner} } keys %{ $entries } ) );
+        $entries->{$winner}->{winner} = 1;
+SEND_SMS:
+        $response = $twilio->POST('SMS/Messages',
+                From => $config->{twilio}->{sms_from},
+                To   => $winner,
+                Body => "Congratulations! You're a raffle winner!"
+        );
+        goto SEND_SMS if $response->{code} != 200;
+        say "The winner is $winner";
+    }
+
     store $entries, $entry_db;
 }
+

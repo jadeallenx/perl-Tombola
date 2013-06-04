@@ -12,15 +12,39 @@ use List::Util qw(shuffle);
 
 my $conf_file = "$ENV{HOME}/.tombola";
 my $entry_db = "entries.db";
-my $winner = 0;
+my $pick_winner = 0;
 my $help = 0;
+
+our $VERSION = '0.01';
 
 GetOptions (
     "conf|c=s"     => \$conf_file,
     "database|d=s" => \$entry_db,
-    "winner|w"     => \$winner,
+    "winner|w"     => \$pick_winner,
     "help|h|?"     => \$help,
 );
+
+if ( $help ) {
+    print <<_EOF;
+usage: $0 [options]
+
+version: $VERSION
+
+
+    --conf     | -c  Specify alternate config file location
+                     (defaults to \$HOME/.tombola)
+
+    --database | -d  Specify alternate entry database location
+                     (defaults to \$CWD)
+
+    --winner   | -w  Pick a winner from all entries. (Winners
+                     can only win once.)
+
+    --help     | -h  This message.
+
+_EOF
+exit 0;
+}
 
 die "Couldn't find $conf_file\n" unless -e $conf_file;
 
@@ -43,29 +67,47 @@ my $data = JSON->new->decode($response->{content});
 
 my $entries = {};
 if ( -e $entry_db) {
-    my $entries = retrieve($entry_db);
+    $entries = retrieve($entry_db);
 }
 
 my @new = grep { lc($_->{body}) eq "enter $config->{entry}->{name}" } 
                 grep { $_->{direction} eq "inbound" }
                 grep { not exists $entries->{$_->{from}} } @{$data->{sms_messages}};
 
-if ( scalar @new ) {
-    map {; $entries->{$_->{from}} = $_ } @new;
+map {; $entries->{$_->{from}} = $_ } @new;
 
-    if ( $winner ) {
-        my $winner = shift( shuffle ( grep { not exists $_->{winner} } keys %{ $entries } ) );
-        $entries->{$winner}->{winner} = 1;
-SEND_SMS:
-        $response = $twilio->POST('SMS/Messages',
-                From => $config->{twilio}->{sms_from},
-                To   => $winner,
-                Body => "Congratulations! You're a raffle winner!"
-        );
-        goto SEND_SMS if $response->{code} != 200;
-        say "The winner is $winner";
+
+if ( $pick_winner ) {
+    my $winner; 
+    my $num_entries = scalar keys %{ $entries };
+
+    if ( $num_entries == 0 ) {
+        die "There aren't any entries.\n";
+    }
+    elsif ( $num_entries == 1 ) {
+        $winner = shift [ keys %{ $entries } ];
+    }
+    else {
+        $winner = shift [ 
+            shuffle ( 
+                grep { not exists $entries->{$_}->{winner} } keys %{ $entries } 
+                )];
     }
 
-    store $entries, $entry_db;
+    if ( ! $winner ) {
+        die "There are $num_entries entries but everyone seems to already be a winner.\n";
+    }
+
+    $entries->{$winner}->{winner} = 1;
+SEND_SMS:
+    $response = $twilio->POST('SMS/Messages',
+        From => $config->{twilio}->{sms_from},
+        To   => $winner,
+        Body => "Congratulations! You're a raffle winner!"
+    );
+#        goto SEND_SMS if $response->{code} != 200;
+    say "This winner is $winner";
 }
+
+store $entries, $entry_db;
 
